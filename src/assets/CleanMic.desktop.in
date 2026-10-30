@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=CleanMic
+Comment=Clean the microphone audio
+Comment[de]=Das Audo des Microphones sound
+Exec=@EXEC_COMMAND@
+Icon=@ICON_NAME@
+Terminal=false
+Type=Application
+Categories=Education;

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.quantum_mutnauq.CleanMic</id>
+  
+  <name>CleanMic</name>
+  <name xml:lang="de">CleanMic</name>
+
+  <summary>Clean the microphone audio</summary>
+  <summary xml:lang="de">Das Audo des Microphones sound</summary>
+
+  <developer id="io.github.quantum_mutnauq.CleanMic">
+    <name>Quantum_mutnauQ</name>
+  </developer>  
+
+  <metadata_license>MIT</metadata_license>
+  <project_license>GPL-2.0-only</project_license>
+  
+   <description>
+
+   </description>
+
+<launchable type="desktop-id">io.github.quantum_mutnauq.CleanMic.desktop</launchable>
+<icon type="stock">io.github.quantum_mutnauq.CleanMic</icon>
+<categories>
+    <category>Audio</category>
+</categories>
+
+  <keywords>
+        <keyword>microphone</keyword>
+  </keywords>
+
+<branding>
+  <color type="primary" scheme_preference="light">#3584e4</color>
+  <color type="primary" scheme_preference="dark">#134380</color>
+</branding>
+
+<content_rating type="oars-1.0" />
+
+<url type="bugtracker">https://github.com/Quantum-mutnauQ/CleanMic/issues</url>
+<url type="homepage">https://github.com/Quantum-mutnauQ/CleanMic/</url>
+
+<screenshots>
+  <screenshot type="default">
+    <caption>Dark Theme</caption>
+    <image></image>
+  </screenshot>
+  <screenshot type="default">
+    <caption>Light Theme</caption>
+    <image></image>
+  </screenshot>
+</screenshots>
+
+
+<releases>
+</releases>
+
+<translation type="gettext">CleanMic</translation>
+</component>
+
+
