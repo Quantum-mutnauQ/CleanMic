@@ -1,10 +1,10 @@
 mod i18n;
 mod UI;
-mod Config;
+mod config;
 mod tray;
 
 use UI::on_activate;
-use Config::build_config_path;
+use config::build_config_path;
 use gtk::prelude::*;
 use gtk::{glib, Application,};
 use gettextrs::{bind_textdomain_codeset, bindtextdomain, textdomain};

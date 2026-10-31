@@ -1,5 +1,5 @@
 use crate::i18n::tr;
-use crate::Config::{save_settings, load_settings};
+use crate::config::{save_settings, load_settings};
 
 use gtk::prelude::*;
 use gtk::*;
@@ -107,7 +107,7 @@ fn on_about_activate() {
     let about_dialog = gtk::AboutDialog::new();
 
     about_dialog.set_program_name(Some("CleanMic"));
-    about_dialog.set_version(Some("4"));
+    about_dialog.set_version(Some("0.0.0"));
     about_dialog.set_comments(Some(&tr("Clean the microphone audio")));
     about_dialog.set_website(Some("https://github.com/Quantum-mutnauQ/CleanMic"));
     about_dialog.set_license_type(gtk::License::Gpl20);
@@ -160,18 +160,53 @@ pub fn on_activate(app: &gtk::Application) {
     #[cfg(flatpak)]
     dw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
 
-    let main_box = gtk::Box::new(Orientation::Vertical, 0);
+    let ui_box = gtk::Box::new(Orientation::Vertical, 0);
 
     let Some(app) = window.application() else { return };
     let menu_bar = create_menu_bar(&app, &window);
-    main_box.append(&menu_bar);
+    ui_box.append(&menu_bar);
+
+    let main_box = gtk::Box::new(Orientation::Vertical, 12);
+    main_box.set_margin_top(7);
+    main_box.set_margin_bottom(10);
+    main_box.set_margin_start(10);
+    main_box.set_margin_end(7);
+    ui_box.append(&main_box);
+
+    let input_label = gtk::Label::new(Some(&tr("Eingang")));
+    input_label.set_halign(gtk::Align::Start);
+    main_box.append(&input_label);
+
+    let input_dropdown = gtk::DropDown::from_strings(&[
+        "Mikrofon 1",
+        "Mikrofon 2",
+        "Mikrofon 3",
+    ]);
+    input_dropdown.set_hexpand(true);
+    main_box.append(&input_dropdown);
+
+    let effects_label = gtk::Label::new(Some(&tr("Effeckte")));
+    effects_label.set_halign(gtk::Align::Start);
+    main_box.append(&effects_label);
+
+
+    let placeholder = gtk::Box::new(Orientation::Vertical, 0);
+    placeholder.set_hexpand(true);
+    placeholder.set_vexpand(true);
+    main_box.append(&placeholder);
+
+    let default_input = gtk::CheckButton::with_label(&tr("Als Standard-Eingabe verwenden"));
+    main_box.append(&default_input);
+
+    let autostart = gtk::CheckButton::with_label(&tr("Autostart"));
+    main_box.append(&autostart);
 
     load_settings();
 
     app.connect_shutdown(|_| {
         save_settings();
     });
-    window.set_child(Some(&main_box));
+    window.set_child(Some(&ui_box));
 
     window.set_hide_on_close(true);
     window.present();
