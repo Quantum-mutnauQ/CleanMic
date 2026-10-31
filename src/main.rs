@@ -1,6 +1,7 @@
 mod i18n;
 mod UI;
 mod Config;
+mod tray;
 
 use UI::on_activate;
 use Config::build_config_path;

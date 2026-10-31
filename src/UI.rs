@@ -63,8 +63,8 @@ fn setup_icons() {
 pub fn create_menu_bar(app: &gtk::Application, window: &gtk::ApplicationWindow) -> gtk::PopoverMenuBar {
     let quit_action = gio::SimpleAction::new("quit", None);
     quit_action.connect_activate({
-        let window = window.clone();
-        move |_, _| on_quit_activate(&window)
+        let app = app.clone();
+        move |_, _| on_quit_activate(&app)
     });
     app.add_action(&quit_action);
 
@@ -99,8 +99,8 @@ pub fn create_menu_bar(app: &gtk::Application, window: &gtk::ApplicationWindow) 
     gtk::PopoverMenuBar::from_model(Some(&menu_model))
 }
 
-fn on_quit_activate(window: &gtk::ApplicationWindow) {
-    window.close();
+fn on_quit_activate(app: &gtk::Application) {
+    app.quit()
 }
 
 fn on_about_activate() {
@@ -127,12 +127,6 @@ fn on_about_activate() {
 fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
     window.set_fullscreened(!window.is_fullscreen());
 }
-
-fn on_close_request(_window: &gtk::ApplicationWindow) -> glib::Propagation {
-    save_settings();
-    glib::Propagation::Proceed
-}
-
 pub fn on_activate(app: &gtk::Application) {
     setup_icons();
 
@@ -174,8 +168,28 @@ pub fn on_activate(app: &gtk::Application) {
 
     load_settings();
 
-    window.connect_close_request(on_close_request);
-
+    app.connect_shutdown(|_| {
+        save_settings();
+    });
     window.set_child(Some(&main_box));
+
+    window.set_hide_on_close(true);
     window.present();
+
+    let rx = crate::tray::start();
+
+    glib::spawn_future_local({
+        let window = window.clone();
+        let app = app.clone();
+        async move {
+            while let Ok(event) = rx.recv().await {
+                match event {
+                    crate::tray::TrayEvent::Show => window.present(),
+                    crate::tray::TrayEvent::Quit => app.quit(),
+                    crate::tray::TrayEvent::Active => println!("Active"),
+                    crate::tray::TrayEvent::Deactive => println!("Deactive"),
+                }
+            }
+        }
+    });
 }

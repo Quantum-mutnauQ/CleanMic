@@ -4,7 +4,9 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
+async-channel = "2.5.0"
 gettext-rs = { version = "0.8.0", features = ["gettext-system"] }
+ksni = { version = "0.3.7", features = ["blocking"] }
 libconfig = "0.1.3"
 pipewire = "0.10.1"
 
