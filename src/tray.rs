@@ -1,5 +1,5 @@
 use crate::i18n::tr;
-use ksni::{blocking::TrayMethods, menu::StandardItem, MenuItem, Tray, menu::CheckmarkItem};
+use ksni::{blocking::{Handle, TrayMethods}, menu::{CheckmarkItem, StandardItem}, MenuItem, Tray};
 
 #[derive(Debug)]
 pub enum TrayEvent {
@@ -11,7 +11,7 @@ pub enum TrayEvent {
 
 pub struct CleanMicTray {
     tx: async_channel::Sender<TrayEvent>,
-    active: bool,
+    pub active: bool,
 }
 
 impl Tray for CleanMicTray {
@@ -82,7 +82,7 @@ impl Tray for CleanMicTray {
     }
 }
 
-pub fn start() -> async_channel::Receiver<TrayEvent> {
+pub fn start() -> Option<(async_channel::Receiver<TrayEvent>, Handle<CleanMicTray>)> {
     let (tx, rx) = async_channel::unbounded();
 
     #[cfg(flatpak)]
@@ -90,12 +90,11 @@ pub fn start() -> async_channel::Receiver<TrayEvent> {
     #[cfg(not(flatpak))]
     let disable_name = false;
 
-    match (CleanMicTray { tx , active: true }).disable_dbus_name(disable_name).spawn() {
-        Ok(handle) => {
-            std::mem::forget(handle);
+    match (CleanMicTray { tx, active: true }).disable_dbus_name(disable_name).spawn() {
+        Ok(handle) => Some((rx, handle)),
+        Err(e) => {
+            eprintln!("{}: {e}", tr("Tray konnte nicht gestartet werden"));
+            None
         }
-        Err(e) => eprintln!("Tray konnte nicht gestartet werden: {e}"),
     }
-
-    rx
 }

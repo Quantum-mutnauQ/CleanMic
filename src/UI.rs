@@ -138,6 +138,7 @@ pub fn on_activate(app: &gtk::Application) {
         .default_width(420)
         .default_height(320)
         .resizable(true)
+        .hide_on_close(true)
         .build();
 
     settings
@@ -171,7 +172,6 @@ pub fn on_activate(app: &gtk::Application) {
     main_box.set_margin_bottom(10);
     main_box.set_margin_start(10);
     main_box.set_margin_end(7);
-    ui_box.append(&main_box);
 
     let input_label = gtk::Label::new(Some(&tr("Eingang")));
     input_label.set_halign(gtk::Align::Start);
@@ -185,9 +185,10 @@ pub fn on_activate(app: &gtk::Application) {
     input_dropdown.set_hexpand(true);
     main_box.append(&input_dropdown);
 
-    let effects_label = gtk::Label::new(Some(&tr("Effeckte")));
-    effects_label.set_halign(gtk::Align::Start);
-    main_box.append(&effects_label);
+    let effects_active = gtk::CheckButton::with_label(&tr("Effeckte"));
+    effects_active.set_halign(gtk::Align::Start);
+    effects_active.set_active(true);
+    main_box.append(&effects_active);
 
 
     let placeholder = gtk::Box::new(Orientation::Vertical, 0);
@@ -196,10 +197,39 @@ pub fn on_activate(app: &gtk::Application) {
     main_box.append(&placeholder);
 
     let default_input = gtk::CheckButton::with_label(&tr("Als Standard-Eingabe verwenden"));
+    default_input.set_active(true);
     main_box.append(&default_input);
 
-    let autostart = gtk::CheckButton::with_label(&tr("Autostart"));
+    let autostart = gtk::CheckButton::with_label(&tr("Autostart in tray"));
+    autostart.set_active(true);
     main_box.append(&autostart);
+
+
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&main_box));
+
+    let blocking_box = gtk::Box::new(Orientation::Vertical, 0);
+    blocking_box.set_hexpand(true);
+    blocking_box.set_vexpand(true);
+    blocking_box.set_can_target(true);
+    blocking_box.set_halign(gtk::Align::Fill);
+    blocking_box.set_valign(gtk::Align::Fill);
+    blocking_box.set_visible(false);
+
+
+    let center_box = gtk::Box::new(Orientation::Vertical, 0);
+    center_box.set_halign(gtk::Align::Center);
+    center_box.set_valign(gtk::Align::Center);
+    center_box.set_hexpand(true);
+    center_box.set_vexpand(true);
+
+    let error_label = gtk::Label::new(Some(&tr("Verbindung zu PipeWire fehlgeschlagen!")));
+    error_label.add_css_class("title-3");
+    center_box.append(&error_label);
+    blocking_box.append(&center_box);
+
+    overlay.add_overlay(&blocking_box);
+    ui_box.append(&overlay);
 
     load_settings();
 
@@ -207,24 +237,69 @@ pub fn on_activate(app: &gtk::Application) {
         save_settings();
     });
     window.set_child(Some(&ui_box));
-
-    window.set_hide_on_close(true);
     window.present();
 
-    let rx = crate::tray::start();
+    if let Some((rx, handle)) = crate::tray::start() {
+         // UI -> Tray
+         effects_active.connect_toggled({
+             let handle = handle.clone();
+             move |cb| {
+                 let active = cb.is_active();
+                 handle.update(move |t: &mut crate::tray::CleanMicTray| {
+                     t.active = active;
+                 });
+             }
+         });
+         // Tray -> UI
+         glib::spawn_future_local({
+             let window = window.clone();
+             let app = app.clone();
+             let effects = effects_active.clone();
+             async move {
+                 let _keep_alive = handle; // Handle am Leben halten
+                 while let Ok(event) = rx.recv().await {
+                     match event {
+                         crate::tray::TrayEvent::Show => window.present(),
+                         crate::tray::TrayEvent::Quit => app.quit(),
+                         crate::tray::TrayEvent::Active => effects.set_active(true),
+                         crate::tray::TrayEvent::Deactive => effects.set_active(false),
+                     }
+                 }
+             }
+         });
+     }
 
-    glib::spawn_future_local({
-        let window = window.clone();
-        let app = app.clone();
-        async move {
-            while let Ok(event) = rx.recv().await {
-                match event {
-                    crate::tray::TrayEvent::Show => window.present(),
-                    crate::tray::TrayEvent::Quit => app.quit(),
-                    crate::tray::TrayEvent::Active => println!("Active"),
-                    crate::tray::TrayEvent::Deactive => println!("Deactive"),
-                }
-            }
-        }
-    });
+     let audio_rx = crate::audio::start();
+     let mics: std::rc::Rc<std::cell::RefCell<Vec<crate::audio::Microphone>>> = Default::default();
+     let model = gtk::StringList::new(&[]);
+     input_dropdown.set_model(Some(&model));
+
+     glib::spawn_future_local({
+         let blocking_box = blocking_box.clone();
+         let error_label = error_label.clone();
+         let mics = mics.clone();
+         async move {
+             use crate::audio::AudioEvent::*;
+             while let Ok(ev) = audio_rx.recv().await {
+                 match ev {
+                     Connected => blocking_box.set_visible(false),
+                     ConnectionFailed(e) => {
+                         error_label.set_text(&format!("{}\n{e}", tr("Verbindung zu PipeWire fehlgeschlagen!")));
+                         blocking_box.set_visible(true);
+                     }
+                     MicAdded(m) => {
+                         model.append(&m.description);
+                         mics.borrow_mut().push(m);
+                     }
+                     MicRemoved(id) => {
+                         let mut v = mics.borrow_mut();
+                         if let Some(pos) = v.iter().position(|m| m.id == id) {
+                             v.remove(pos);
+                             model.remove(pos as u32);
+                         }
+                     }
+                 }
+             }
+         }
+     });
 }

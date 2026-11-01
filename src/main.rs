@@ -2,6 +2,7 @@ mod i18n;
 mod UI;
 mod config;
 mod tray;
+mod audio;
 
 use UI::on_activate;
 use config::build_config_path;
