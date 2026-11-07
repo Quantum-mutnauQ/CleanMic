@@ -4,7 +4,6 @@ use crate::config::{save_settings, load_settings};
 use gtk::prelude::*;
 use gtk::*;
 
-
 const APP_ID: &str = "io.github.quantum_mutnauq.CleanMic";
 
 #[cfg(not(flatpak))]
@@ -269,7 +268,8 @@ pub fn on_activate(app: &gtk::Application) {
          });
      }
 
-     let audio_rx = crate::audio::start();
+     let (audio_rx, cmd_tx) = crate::audio::start();
+     let cmd_tx = std::rc::Rc::new(cmd_tx);
      let mics: std::rc::Rc<std::cell::RefCell<Vec<crate::audio::Microphone>>> = Default::default();
      let model = gtk::StringList::new(&[]);
      input_dropdown.set_model(Some(&model));
@@ -277,28 +277,54 @@ pub fn on_activate(app: &gtk::Application) {
      glib::spawn_future_local({
          let blocking_box = blocking_box.clone();
          let error_label = error_label.clone();
+         let default_input = default_input.clone();
          let mics = mics.clone();
+         let cmd_tx=cmd_tx.clone();
+         let input_dropdown=input_dropdown.clone();
          async move {
              use crate::audio::AudioEvent::*;
              while let Ok(ev) = audio_rx.recv().await {
                  match ev {
                      Connected => blocking_box.set_visible(false),
                      ConnectionFailed(e) => {
-                         error_label.set_text(&format!("{}\n{e}", tr("Verbindung zu PipeWire fehlgeschlagen!")));
+                         error_label.set_text(&format!("{}\n{e}",tr("Verbindung zu PipeWire fehlgeschlagen!")));
                          blocking_box.set_visible(true);
                      }
                      MicAdded(m) => {
-                         model.append(&m.description);
+                         let first = mics.borrow().is_empty();
+                         let desc = m.description.clone();
+                         let name = m.name.clone();
                          mics.borrow_mut().push(m);
+                         model.append(&desc);
+                         if first {
+                             input_dropdown.set_selected(0);
+                             let _ = cmd_tx.send(crate::audio::AudioCommand::SelectMic(name));
+                         }
                      }
                      MicRemoved(id) => {
-                         let mut v = mics.borrow_mut();
-                         if let Some(pos) = v.iter().position(|m| m.id == id) {
-                             v.remove(pos);
+                         let pos = mics.borrow().iter().position(|m| m.id == id);
+                         if let Some(pos) = pos {
+                             mics.borrow_mut().remove(pos);
                              model.remove(pos as u32);
                          }
                      }
+                     VirtualMicReady => {
+                         if default_input.is_active() {
+                             crate::audio::set_default_source(crate::audio::VIRTUAL_MIC_NAME);
+                         }
+                     }
                  }
+             }
+         }
+     });
+
+     input_dropdown.connect_selected_notify({
+         let mics = mics.clone();
+         let cmd_tx = cmd_tx.clone();
+         move |dd| {
+             let idx = dd.selected() as usize;
+             if let Some(m) = mics.borrow().get(idx) {
+                 let _ = cmd_tx.send(crate::audio::AudioCommand::SelectMic(m.name.clone()));
              }
          }
      });

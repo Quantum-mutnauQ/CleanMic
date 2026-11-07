@@ -3,6 +3,7 @@ mod UI;
 mod config;
 mod tray;
 mod audio;
+mod effects;
 
 use UI::on_activate;
 use config::build_config_path;
