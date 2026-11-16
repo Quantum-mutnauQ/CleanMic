@@ -12,6 +12,10 @@ use gtk::{glib, Application,};
 use gettextrs::{bind_textdomain_codeset, bindtextdomain, textdomain};
 
 fn main() -> glib::ExitCode {
+    let args: Vec<String> = std::env::args().filter(|arg| arg != "-auto").collect();
+
+    let auto_start = std::env::args().any(|arg| arg == "-auto");
+
     #[cfg(flatpak)]
     let locale_dir = std::path::PathBuf::from("/app/share/locale");
 
@@ -34,7 +38,7 @@ fn main() -> glib::ExitCode {
         .application_id("io.github.quantum_mutnauq.CleanMic")
         .build();
 
-    app.connect_activate(on_activate);
+    app.connect_activate(move |app| {on_activate(app, auto_start);});
 
-    app.run()
+    app.run_with_args(&args)
 }

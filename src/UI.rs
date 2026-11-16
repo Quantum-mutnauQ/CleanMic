@@ -1,5 +1,6 @@
 use crate::i18n::tr;
 use crate::config::{save_settings, load_settings};
+use crate::effects::{available_effects};
 
 use gtk::prelude::*;
 use gtk::*;
@@ -126,7 +127,7 @@ fn on_about_activate() {
 fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
     window.set_fullscreened(!window.is_fullscreen());
 }
-pub fn on_activate(app: &gtk::Application) {
+pub fn on_activate(app: &gtk::Application, auto_start: bool) {
     setup_icons();
 
     let Some(settings) = create_settings() else { return };
@@ -177,23 +178,43 @@ pub fn on_activate(app: &gtk::Application) {
     main_box.append(&input_label);
 
     let input_dropdown = gtk::DropDown::from_strings(&[
-        "Mikrofon 1",
-        "Mikrofon 2",
-        "Mikrofon 3",
+        &tr("Etwas tut nicht!!"),
     ]);
     input_dropdown.set_hexpand(true);
     main_box.append(&input_dropdown);
 
-    let effects_active = gtk::CheckButton::with_label(&tr("Effeckte"));
-    effects_active.set_halign(gtk::Align::Start);
+    let mic_settings_hbox = gtk::Box::new(Orientation::Horizontal, 12);
+    main_box.append(&mic_settings_hbox);
+
+    let mic_gain_label = gtk::Label::new(Some(&tr("Microphone Lautschärke")));
+    mic_settings_hbox.append(&mic_gain_label);
+
+    let mic_gain_adjustment = gtk::Adjustment::new(100.0, 0.0, 200.0, 1.0, 10.0, 0.0);
+    let mic_gain_spinner = gtk::SpinButton::new(Some(&mic_gain_adjustment), 1.0, 0,);
+    mic_settings_hbox.append(&mic_gain_spinner);
+
+    let effects_active = gtk::CheckButton::with_label(&tr("Effeckte anwenden"));
+    effects_active.set_halign(gtk::Align::End);
     effects_active.set_active(true);
-    main_box.append(&effects_active);
+    mic_settings_hbox.append(&effects_active);
 
 
-    let placeholder = gtk::Box::new(Orientation::Vertical, 0);
-    placeholder.set_hexpand(true);
-    placeholder.set_vexpand(true);
-    main_box.append(&placeholder);
+    let effects_frame = gtk::Frame::new(None);
+    effects_frame.set_hexpand(true);
+    effects_frame.set_vexpand(true);
+    main_box.append(&effects_frame);
+
+    let effects_scraller = gtk::ScrolledWindow::new();
+    effects_frame.set_child(Some(&effects_scraller));
+
+    let effeckts_list = gtk::ListBox::new();
+    effects_scraller.set_child(Some(&effeckts_list));
+
+
+
+    let add_button = gtk::Button::with_label(&tr("➕ Effeckt hinzufügen"));
+    add_button.set_hexpand(true);
+    main_box.append(&add_button);
 
     let default_input = gtk::CheckButton::with_label(&tr("Als Standard-Eingabe verwenden"));
     default_input.set_active(true);
@@ -236,7 +257,6 @@ pub fn on_activate(app: &gtk::Application) {
         save_settings();
     });
     window.set_child(Some(&ui_box));
-    window.present();
 
     if let Some((rx, handle)) = crate::tray::start() {
          // UI -> Tray
@@ -328,4 +348,116 @@ pub fn on_activate(app: &gtk::Application) {
              }
          }
      });
+
+     mic_gain_spinner.connect_value_changed(|spinner| {
+         let gain = spinner.value_as_int();
+         println!("Neuer Mic Gain: {}", gain);
+     });
+
+     let window_transient = window.clone();
+     add_button.connect_clicked(move |button| {
+         let selection_window = ApplicationWindow::builder().application(&app).build();
+         selection_window.set_title(Some(&tr("Effeckt hinzufügen")));
+         selection_window.set_default_size(180,360);
+         selection_window.set_modal(true);
+         selection_window.set_transient_for(Some(&window_transient));
+         selection_window.set_visible(true);
+         selection_window.set_deletable(false);
+
+         let vbox = gtk::Box::new(Orientation::Vertical, 12);
+         vbox.set_margin_top(7);
+         vbox.set_margin_bottom(10);
+         vbox.set_margin_start(10);
+         vbox.set_margin_end(7);
+         selection_window.set_child(Some(&vbox));
+
+         let title = gtk::Label::new(Some(&tr("Wähle einen Effekt aus:")));
+         vbox.append(&title);
+
+         let search_entry = gtk::SearchEntry::new();
+         search_entry.set_placeholder_text(Some(&tr("Effekte suchen...")));
+         vbox.append(&search_entry);
+
+         let list_box = gtk::ListBox::new();
+         list_box.set_selection_mode(gtk::SelectionMode::Single);
+
+
+
+         for effect in available_effects() {
+             let row = gtk::ListBoxRow::new();
+
+             let label = gtk::Label::new(Some(&tr(effect.name)));
+             label.set_halign(gtk::Align::Start);
+             label.set_margin_top(8);
+             label.set_margin_bottom(8);
+             label.set_margin_start(10);
+
+             row.set_child(Some(&label));
+             list_box.append(&row);
+         }
+
+         let list_box_clone = list_box.clone();
+
+         search_entry.connect_search_changed(move |entry| {
+             let search_text = entry.text().to_string().to_lowercase();
+
+             let mut child = list_box_clone.first_child();
+
+             while let Some(widget) = child {
+                 let next = widget.next_sibling();
+
+                 if let Some(row) = widget.downcast_ref::<gtk::ListBoxRow>() {
+                     if let Some(label) = row.child() {
+                         if let Some(label) = label.downcast_ref::<gtk::Label>() {
+                             let text = label.text().to_string().to_lowercase();
+
+                             row.set_visible(text.contains(&search_text));
+                         }
+                     }
+                 }
+
+                 child = next;
+             }
+         });
+
+         let scroll = gtk::ScrolledWindow::new();
+         scroll.set_vexpand(true);
+         scroll.set_child(Some(&list_box));
+
+         vbox.append(&scroll);
+
+         let add_bttn = gtk::Button::with_label(&tr("Hinzufügen"));
+         add_bttn.set_hexpand(true);
+         vbox.append(&add_bttn);
+
+         let close_bttn = gtk::Button::with_label(&tr("Schlesen"));
+         close_bttn.set_hexpand(true);
+         vbox.append(&close_bttn);
+
+         let selection_window_clone = selection_window.clone();
+         close_bttn.connect_clicked(move |_| {
+             selection_window_clone.destroy();
+         });
+
+         let selection_window_clone = selection_window.clone();
+         add_bttn.connect_clicked(move |_| {
+             if let Some(row) = list_box.selected_row() {
+                 if let Some(label) = row.child() {
+                     if let Some(label) = label.downcast_ref::<gtk::Label>() {
+                         let effect = label.text();
+
+                         println!("Ausgewählter Effekt: {}", effect);
+
+                         selection_window_clone.destroy();
+                     }
+                 }
+             }
+         });
+
+        selection_window.present();
+     });
+
+     if !(auto_start && autostart.is_active()) {
+         window.present();
+     }
 }

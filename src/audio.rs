@@ -5,6 +5,8 @@ use crate::i18n::tr;
 use std::process::Command;
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, sync::{Arc, Mutex}};
 use crate::effects::EffectChain;
+use crate::effects::*;
+use oxiaudio_dsp::{Compressor, NoiseGate};
 
 type SharedBuf = Arc<Mutex<VecDeque<f32>>>;
 type StreamPair = (StreamRc, pw::stream::StreamListener<()>);
@@ -89,7 +91,13 @@ fn run(tx: async_channel::Sender<AudioEvent>, cmd_rx: pw::channel::Receiver<Audi
 
     let buf: SharedBuf = Default::default();
     let chain = Arc::new(Mutex::new(EffectChain::default()));
-    //chain.lock().unwrap().push(crate::effects::Normalizer::new());
+    chain.lock().unwrap().push(Filter::highpass(2, 80.0, SAMPLE_RATE));
+    chain.lock().unwrap().push(Filter::notch(50.0, 30.0, SAMPLE_RATE));
+    chain.lock().unwrap().push(GateFx::new(NoiseGate::new(-50.0), SAMPLE_RATE));
+    chain.lock().unwrap().push(CompressorFx::new(Compressor::new(-18.0, 3.0, 5.0, 80.0), SAMPLE_RATE));
+    chain.lock().unwrap().push(Gain::db(2.0));
+    chain.lock().unwrap().push(CompressorFx::limiter(-1.0, 50.0, SAMPLE_RATE));
+    chain.lock().unwrap().push(Gain::db(18.0));
 
     let (_vmic_stream, _vmic_listener) = create_virtual_mic(&core, buf.clone()).map_err(|_| pw::Error::CreationFailed)?;
 
@@ -196,7 +204,6 @@ fn create_capture(core: &pw::core::CoreRc, target: &str, buf: SharedBuf, chain: 
     let stream = StreamRc::new(core.clone(), "CleanMic Capture", properties! {
         *pw::keys::MEDIA_TYPE => "Audio",
         *pw::keys::MEDIA_CATEGORY => "Capture",
-        *pw::keys::MEDIA_ROLE => "Communication",
         "target.object" => target,
         "node.target" => target,
         "node.dont-fallback" => "true",
