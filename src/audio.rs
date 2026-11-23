@@ -6,13 +6,18 @@ use std::process::Command;
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, sync::{Arc, Mutex}};
 use crate::effects::EffectChain;
 use crate::effects::*;
-use oxiaudio_dsp::{Compressor, NoiseGate};
 
 type SharedBuf = Arc<Mutex<VecDeque<f32>>>;
 type StreamPair = (StreamRc, pw::stream::StreamListener<()>);
 
 pub enum AudioCommand {
-    SelectMic(String), // node.name
+    SelectMic(String),
+    AddEffect { id: EffectId, effect: Box<dyn Effect> },
+    RemoveEffect(EffectId),
+    MoveEffect { id: EffectId, new_index: usize },
+    SetEffectEnabled { id: EffectId, enabled: bool },
+    SetParam { id: EffectId, param: &'static str, value: f32 },
+    SetChainEnabled(bool),
 }
 
 pub struct Microphone {
@@ -91,13 +96,6 @@ fn run(tx: async_channel::Sender<AudioEvent>, cmd_rx: pw::channel::Receiver<Audi
 
     let buf: SharedBuf = Default::default();
     let chain = Arc::new(Mutex::new(EffectChain::default()));
-    chain.lock().unwrap().push(Filter::highpass(2, 80.0, SAMPLE_RATE));
-    chain.lock().unwrap().push(Filter::notch(50.0, 30.0, SAMPLE_RATE));
-    chain.lock().unwrap().push(GateFx::new(NoiseGate::new(-50.0), SAMPLE_RATE));
-    chain.lock().unwrap().push(CompressorFx::new(Compressor::new(-18.0, 3.0, 5.0, 80.0), SAMPLE_RATE));
-    chain.lock().unwrap().push(Gain::db(2.0));
-    chain.lock().unwrap().push(CompressorFx::limiter(-1.0, 50.0, SAMPLE_RATE));
-    chain.lock().unwrap().push(Gain::db(18.0));
 
     let (_vmic_stream, _vmic_listener) = create_virtual_mic(&core, buf.clone()).map_err(|_| pw::Error::CreationFailed)?;
 
@@ -122,6 +120,12 @@ fn run(tx: async_channel::Sender<AudioEvent>, cmd_rx: pw::channel::Receiver<Audi
                     Err(e) => eprintln!("Capture fehlgeschlagen: {e}"),
                 }
             }
+            AudioCommand::AddEffect { id, effect } => chain.lock().unwrap().add(id, effect),
+            AudioCommand::RemoveEffect(id) => chain.lock().unwrap().remove(id),
+            AudioCommand::MoveEffect { id, new_index } => chain.lock().unwrap().move_to(id, new_index),
+            AudioCommand::SetEffectEnabled { id, enabled } => chain.lock().unwrap().set_slot_enabled(id, enabled),
+            AudioCommand::SetParam { id, param, value } => chain.lock().unwrap().set_param(id, param, value),
+            AudioCommand::SetChainEnabled(on) => chain.lock().unwrap().set_enabled(on),
         }
     });
     mainloop.run();

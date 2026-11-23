@@ -1,5 +1,6 @@
 use oxiaudio_dsp::{biquad, BiquadFilter, Compressor, DeEsser, Expander, MultibandCompressor, NoiseGate,ParametricEq,};
 use std::f32::consts::FRAC_1_SQRT_2;
+use gtk::prelude::*;
 use gtk::*;
 use std::boxed::Box as HeapBox;
 
@@ -7,10 +8,18 @@ pub const SAMPLE_RATE: u32 = 48_000;
 
 // ───────────────────────────── Trait & Kette ─────────────────────────────
 
+pub type ParamSender = std::rc::Rc<dyn Fn(&'static str, f32)>;
+
 pub trait Effect: Send + 'static {
     fn process(&mut self, samples: &mut [f32]);
 
-    fn configGUI(&self) -> gtk::Box;
+    fn configGUI(&self, send: ParamSender) -> gtk::Box;
+
+    fn set_param(&mut self, _param: &str, _value: f32) {}
+
+    fn new() -> Self
+    where
+        Self: Sized;
 
     fn name() -> &'static str
     where
@@ -25,9 +34,17 @@ pub trait Effect: Send + 'static {
         Self: Sized;
 }
 
+pub type EffectId = u64;
+
 pub struct EffectChain {
-    effects: Vec<HeapBox<dyn Effect>>,
+    effects: Vec<Slot>,
     enabled: bool,
+}
+
+struct Slot {
+    id: EffectId,
+    enabled: bool,
+    fx: HeapBox<dyn Effect>
 }
 
 impl Default for EffectChain {
@@ -40,51 +57,46 @@ pub struct EffectDescriptor {
     pub name: &'static str,
     pub description: &'static str,
     pub category: &'static str,
+    pub constructor: fn() -> HeapBox<dyn Effect>,
 }
 
 pub fn available_effects() -> Vec<EffectDescriptor> {
     vec![
         EffectDescriptor {
-            name: MultibandFx::name(),
-            description: MultibandFx::description(),
-            category: MultibandFx::category(),
-        },
-        EffectDescriptor {
-            name: DeEsserFx::name(),
-            description: DeEsserFx::description(),
-            category: DeEsserFx::category(),
-        },
-        EffectDescriptor {
-            name: GateFx::name(),
-            description: GateFx::description(),
-            category: GateFx::category(),
-        },
-        EffectDescriptor {
-            name: ExpanderFx::name(),
-            description: ExpanderFx::description(),
-            category: ExpanderFx::category(),
-        },
-        EffectDescriptor {
-            name: CompressorFx::name(),
-            description: CompressorFx::description(),
-            category: CompressorFx::category(),
-        },
-        EffectDescriptor {
-            name: Filter::name(),
-            description: Filter::description(),
-            category: Filter::category(),
-        },
-        EffectDescriptor {
             name: Gain::name(),
             description: Gain::description(),
             category: Gain::category(),
+            constructor: || HeapBox::new(Gain::new()),
         },
     ]
 }
 
 impl EffectChain {
-    pub fn push(&mut self, e: impl Effect + 'static) {
-        self.effects.push(HeapBox::new(e));
+    pub fn add(&mut self, id: EffectId, fx: HeapBox<dyn Effect>) {
+        self.effects.push(Slot { id, enabled: true, fx });
+    }
+
+    pub fn remove(&mut self, id: EffectId) {
+        self.effects.retain(|s| s.id != id);
+    }
+
+    pub fn move_to(&mut self, id: EffectId, new_index: usize) {
+        if let Some(from) = self.effects.iter().position(|s| s.id == id) {
+            let slot = self.effects.remove(from);
+            self.effects.insert(new_index.min(self.effects.len()), slot);
+        }
+    }
+
+    pub fn set_slot_enabled(&mut self, id: EffectId, on: bool) {
+        if let Some(s) = self.effects.iter_mut().find(|s| s.id == id) {
+            s.enabled = on;
+        }
+    }
+
+    pub fn set_param(&mut self, id: EffectId, p: &str, v: f32) {
+        if let Some(s) = self.effects.iter_mut().find(|s| s.id == id) {
+            s.fx.set_param(p, v);
+        }
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
@@ -95,8 +107,8 @@ impl EffectChain {
         if !self.enabled {
             return;
         }
-        for e in &mut self.effects {
-            e.process(samples);
+        for s in self.effects.iter_mut().filter(|s| s.enabled) {
+            s.fx.process(samples);
         }
     }
 
@@ -221,7 +233,10 @@ impl Effect for Filter {
             *s = v;
         }
     }
-    fn configGUI(&self) -> gtk::Box{
+    fn new() -> Self {
+        Self::highpass(2, 80.0, SAMPLE_RATE)
+    }
+    fn configGUI(&self, send: ParamSender) -> gtk::Box{
         gtk::Box::new(Orientation::Vertical, 0)
     }
 
@@ -282,7 +297,13 @@ impl Effect for CompressorFx {
             *s = self.tick(*s);
         }
     }
-    fn configGUI(&self) -> gtk::Box{
+    fn new() -> Self {
+        let mut p = Compressor::new(-18.0, 4.0, 10.0, 100.0);
+        p.knee_db = 6.0;
+        Self::new(p, SAMPLE_RATE)
+    }
+
+    fn configGUI(&self, send: ParamSender) -> gtk::Box{
         gtk::Box::new(Orientation::Vertical, 0)
     }
     fn name() -> &'static str {
@@ -332,9 +353,13 @@ impl Effect for ExpanderFx {
             *s *= db_to_lin(self.env);
         }
     }
-    fn configGUI(&self) -> gtk::Box{
+    fn new() -> Self {
+        Self::new(Expander::new(-40.0, 2.0, 5.0, 100.0), SAMPLE_RATE)
+    }
+    fn configGUI(&self, send: ParamSender) -> gtk::Box{
         gtk::Box::new(Orientation::Vertical, 0)
     }
+
     fn name() -> &'static str {
         "ExpanderFX"
     }
@@ -440,9 +465,13 @@ impl Effect for GateFx {
             *s = self.tick(*s);
         }
     }
-    fn configGUI(&self) -> gtk::Box{
+    fn new() -> Self {
+        Self::new(NoiseGate::new(-50.0), SAMPLE_RATE)
+    }
+    fn configGUI(&self, send: ParamSender) -> gtk::Box{
        gtk::Box::new(Orientation::Vertical, 0)
     }
+
     fn name() -> &'static str {
         "GateFx"
     }
@@ -498,9 +527,13 @@ impl Effect for DeEsserFx {
             *s *= db_to_lin(gain_db);
         }
     }
-    fn configGUI(&self) -> gtk::Box{
+    fn new() -> Self {
+        Self::new(DeEsser::new(-20.0, SAMPLE_RATE))
+    }
+    fn configGUI(&self, send: ParamSender) -> gtk::Box{
         gtk::Box::new(Orientation::Vertical, 0)
     }
+
     fn name() -> &'static str {
         "DeEsserFx"
     }
@@ -577,9 +610,13 @@ impl Effect for MultibandFx {
             *s = sum;
         }
     }
-    fn configGUI(&self) -> gtk::Box{
+    fn new() -> Self {
+        Self::new(MultibandCompressor::three_band(-20.0, -20.0, -20.0), SAMPLE_RATE)
+    }
+    fn configGUI(&self, send: ParamSender) -> gtk::Box{
         gtk::Box::new(Orientation::Vertical, 0)
     }
+
     fn name() -> &'static str {
         "Multiband Fx"
     }
@@ -609,8 +646,24 @@ impl Effect for Gain {
             *s *= self.0;
         }
     }
-    fn configGUI(&self) -> gtk::Box{
-        gtk::Box::new(Orientation::Vertical, 0)
+    fn new() -> Self{
+        Self(1.0)
+    }
+
+    fn configGUI(&self, send: ParamSender) -> gtk::Box{
+        let settings = gtk::Box::new(Orientation::Vertical, 0);
+
+        let spin = gtk::SpinButton::with_range(-40.0, 40.0, 0.5);
+
+        spin.connect_value_changed(move |s| send("gain_db", s.value() as f32));
+
+        settings.append(&spin);
+
+        settings
+    }
+
+    fn set_param(&mut self, p: &str, v: f32) {
+        if p == "gain_db" { self.0 = db_to_lin(v); }
     }
 
     fn name() -> &'static str {

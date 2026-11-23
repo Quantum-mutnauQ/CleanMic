@@ -1,6 +1,10 @@
 use crate::i18n::tr;
 use crate::config::{save_settings, load_settings};
-use crate::effects::{available_effects};
+use crate::effects::{available_effects, EffectId, Effect, ParamSender};
+use crate::audio::AudioCommand;
+use std::rc::Rc;
+use std::cell::Cell;
+use pipewire as pw;
 
 use gtk::prelude::*;
 use gtk::*;
@@ -208,6 +212,7 @@ pub fn on_activate(app: &gtk::Application, auto_start: bool) {
     effects_frame.set_child(Some(&effects_scraller));
 
     let effeckts_list = gtk::ListBox::new();
+    effeckts_list.set_selection_mode(gtk::SelectionMode::None);
     effects_scraller.set_child(Some(&effeckts_list));
 
 
@@ -294,6 +299,8 @@ pub fn on_activate(app: &gtk::Application, auto_start: bool) {
      let model = gtk::StringList::new(&[]);
      input_dropdown.set_model(Some(&model));
 
+     let next_id = Rc::new(Cell::new(0u64));
+
      glib::spawn_future_local({
          let blocking_box = blocking_box.clone();
          let error_label = error_label.clone();
@@ -318,7 +325,7 @@ pub fn on_activate(app: &gtk::Application, auto_start: bool) {
                          model.append(&desc);
                          if first {
                              input_dropdown.set_selected(0);
-                             let _ = cmd_tx.send(crate::audio::AudioCommand::SelectMic(name));
+                             let _ = cmd_tx.send(AudioCommand::SelectMic(name));
                          }
                      }
                      MicRemoved(id) => {
@@ -344,7 +351,7 @@ pub fn on_activate(app: &gtk::Application, auto_start: bool) {
          move |dd| {
              let idx = dd.selected() as usize;
              if let Some(m) = mics.borrow().get(idx) {
-                 let _ = cmd_tx.send(crate::audio::AudioCommand::SelectMic(m.name.clone()));
+                 let _ = cmd_tx.send(AudioCommand::SelectMic(m.name.clone()));
              }
          }
      });
@@ -355,109 +362,217 @@ pub fn on_activate(app: &gtk::Application, auto_start: bool) {
      });
 
      let window_transient = window.clone();
-     add_button.connect_clicked(move |button| {
-         let selection_window = ApplicationWindow::builder().application(&app).build();
-         selection_window.set_title(Some(&tr("Effeckt hinzufügen")));
-         selection_window.set_default_size(180,360);
-         selection_window.set_modal(true);
-         selection_window.set_transient_for(Some(&window_transient));
-         selection_window.set_visible(true);
-         selection_window.set_deletable(false);
+     add_button.connect_clicked({
+         let cmd_tx = cmd_tx.clone();
+         let next_id = next_id.clone();
+         let effeckts_list = effeckts_list.clone();
+             move |button| {
+             let selection_window = ApplicationWindow::builder().application(&app).build();
+             selection_window.set_title(Some(&tr("Effeckt hinzufügen")));
+             selection_window.set_default_size(180,360);
+             selection_window.set_modal(true);
+             selection_window.set_transient_for(Some(&window_transient));
+             selection_window.set_visible(true);
+             selection_window.set_deletable(false);
 
-         let vbox = gtk::Box::new(Orientation::Vertical, 12);
-         vbox.set_margin_top(7);
-         vbox.set_margin_bottom(10);
-         vbox.set_margin_start(10);
-         vbox.set_margin_end(7);
-         selection_window.set_child(Some(&vbox));
+             let vbox = gtk::Box::new(Orientation::Vertical, 12);
+             vbox.set_margin_top(7);
+             vbox.set_margin_bottom(10);
+             vbox.set_margin_start(10);
+             vbox.set_margin_end(7);
+             selection_window.set_child(Some(&vbox));
 
-         let title = gtk::Label::new(Some(&tr("Wähle einen Effekt aus:")));
-         vbox.append(&title);
+             let title = gtk::Label::new(Some(&tr("Wähle einen Effekt aus:")));
+             vbox.append(&title);
 
-         let search_entry = gtk::SearchEntry::new();
-         search_entry.set_placeholder_text(Some(&tr("Effekte suchen...")));
-         vbox.append(&search_entry);
+             let search_entry = gtk::SearchEntry::new();
+             search_entry.set_placeholder_text(Some(&tr("Effekte suchen...")));
+             vbox.append(&search_entry);
 
-         let list_box = gtk::ListBox::new();
-         list_box.set_selection_mode(gtk::SelectionMode::Single);
+             let list_box = gtk::ListBox::new();
+             list_box.set_selection_mode(gtk::SelectionMode::Single);
 
 
 
-         for effect in available_effects() {
-             let row = gtk::ListBoxRow::new();
+             for effect in available_effects() {
+                 let row = gtk::ListBoxRow::new();
 
-             let label = gtk::Label::new(Some(&tr(effect.name)));
-             label.set_halign(gtk::Align::Start);
-             label.set_margin_top(8);
-             label.set_margin_bottom(8);
-             label.set_margin_start(10);
+                 let label = gtk::Label::new(Some(&tr(effect.name)));
+                 label.set_halign(gtk::Align::Start);
+                 label.set_margin_top(8);
+                 label.set_margin_bottom(8);
+                 label.set_margin_start(10);
 
-             row.set_child(Some(&label));
-             list_box.append(&row);
-         }
+                 row.set_child(Some(&label));
+                 list_box.append(&row);
+             }
 
-         let list_box_clone = list_box.clone();
+             let list_box_clone = list_box.clone();
 
-         search_entry.connect_search_changed(move |entry| {
-             let search_text = entry.text().to_string().to_lowercase();
+             search_entry.connect_search_changed(move |entry| {
+                 let search_text = entry.text().to_string().to_lowercase();
 
-             let mut child = list_box_clone.first_child();
+                 let mut child = list_box_clone.first_child();
 
-             while let Some(widget) = child {
-                 let next = widget.next_sibling();
+                 while let Some(widget) = child {
+                     let next = widget.next_sibling();
 
-                 if let Some(row) = widget.downcast_ref::<gtk::ListBoxRow>() {
-                     if let Some(label) = row.child() {
-                         if let Some(label) = label.downcast_ref::<gtk::Label>() {
-                             let text = label.text().to_string().to_lowercase();
+                     if let Some(row) = widget.downcast_ref::<gtk::ListBoxRow>() {
+                         if let Some(label) = row.child() {
+                             if let Some(label) = label.downcast_ref::<gtk::Label>() {
+                                 let text = label.text().to_string().to_lowercase();
 
-                             row.set_visible(text.contains(&search_text));
+                                 row.set_visible(text.contains(&search_text));
+                             }
+                         }
+                     }
+
+                     child = next;
+                 }
+             });
+
+             let scroll = gtk::ScrolledWindow::new();
+             scroll.set_vexpand(true);
+             scroll.set_child(Some(&list_box));
+
+             vbox.append(&scroll);
+
+             let add_bttn = gtk::Button::with_label(&tr("Hinzufügen"));
+             add_bttn.set_hexpand(true);
+             vbox.append(&add_bttn);
+
+             let close_bttn = gtk::Button::with_label(&tr("Schlesen"));
+             close_bttn.set_hexpand(true);
+             vbox.append(&close_bttn);
+
+             let selection_window_clone = selection_window.clone();
+             close_bttn.connect_clicked(move |_| {
+                 selection_window_clone.destroy();
+             });
+
+             let selection_window_clone = selection_window.clone();
+             add_bttn.connect_clicked({
+                 let cmd_tx = cmd_tx.clone();
+                 let next_id = next_id.clone();
+                 let effeckts_list = effeckts_list.clone();
+                 move |_| {
+                     if let Some(row) = list_box.selected_row() {
+                         if let Some(label) = row.child() {
+                             let idx = list_box.selected_row().map(|r| r.index() as usize);
+                             let descs = available_effects();
+                             if let Some(d) = idx.and_then(|i| descs.get(i)) {
+                                 let id = next_id.replace(next_id.get() + 1);
+                                 let effect = (d.constructor)();
+                                 let name = d.name;
+                                 let gui = effect.configGUI(make_sender(id, &cmd_tx));
+                                 add_effect_row(&effeckts_list, id, name, gui, cmd_tx.clone());
+                                 let _ = cmd_tx.send(AudioCommand::AddEffect { id, effect });
+                             }
                          }
                      }
                  }
+             });
 
-                 child = next;
-             }
-         });
-
-         let scroll = gtk::ScrolledWindow::new();
-         scroll.set_vexpand(true);
-         scroll.set_child(Some(&list_box));
-
-         vbox.append(&scroll);
-
-         let add_bttn = gtk::Button::with_label(&tr("Hinzufügen"));
-         add_bttn.set_hexpand(true);
-         vbox.append(&add_bttn);
-
-         let close_bttn = gtk::Button::with_label(&tr("Schlesen"));
-         close_bttn.set_hexpand(true);
-         vbox.append(&close_bttn);
-
-         let selection_window_clone = selection_window.clone();
-         close_bttn.connect_clicked(move |_| {
-             selection_window_clone.destroy();
-         });
-
-         let selection_window_clone = selection_window.clone();
-         add_bttn.connect_clicked(move |_| {
-             if let Some(row) = list_box.selected_row() {
-                 if let Some(label) = row.child() {
-                     if let Some(label) = label.downcast_ref::<gtk::Label>() {
-                         let effect = label.text();
-
-                         println!("Ausgewählter Effekt: {}", effect);
-
-                         selection_window_clone.destroy();
-                     }
-                 }
-             }
-         });
-
-        selection_window.present();
+            selection_window.present();
+         }
      });
 
      if !(auto_start && autostart.is_active()) {
          window.present();
      }
+}
+
+fn make_sender(id: EffectId, tx: &Rc<pw::channel::Sender<AudioCommand>>) -> ParamSender {
+    let tx = tx.clone();
+    Rc::new(move |param, value| {
+        let _ = tx.send(AudioCommand::SetParam { id, param, value });
+    })
+}
+
+fn count_rows(list: &gtk::ListBox) -> i32 {
+    let mut n = 0;
+    let mut child = list.first_child();
+    while let Some(w) = child {
+        n += 1;
+        child = w.next_sibling();
+    }
+    n
+}
+
+fn add_effect_row(list: &gtk::ListBox, id: EffectId, name: &str, config_gui: gtk::Box, tx: Rc<pw::channel::Sender<AudioCommand>>,) {
+    let send: ParamSender = {
+        let tx = tx.clone();
+        Rc::new(move |param, value| {
+            let _ = tx.send(AudioCommand::SetParam { id, param, value });
+        })
+    };
+
+    let (settings, check_button, up, down, remove) = effectTemplateGUI(name.to_string(), &config_gui);
+
+    let row = gtk::ListBoxRow::new();
+    row.set_activatable(false);
+    row.set_child(Some(&settings));
+    list.append(&row);
+
+    check_button.connect_toggled({
+        let tx = tx.clone();
+        move |cb| {
+            let _ = tx.send(AudioCommand::SetEffectEnabled { id, enabled: cb.is_active() });
+        }
+    });
+
+    up.connect_clicked(glib::clone!(
+        #[weak] list, #[weak] row, #[strong] tx,
+        move |_| move_row(&list, &row, row.index() - 1, id, &tx)
+    ));
+    down.connect_clicked(glib::clone!(
+        #[weak] list, #[weak] row, #[strong] tx,
+        move |_| move_row(&list, &row, row.index() + 1, id, &tx)
+    ));
+
+    remove.connect_clicked(glib::clone!(
+        #[weak] list, #[weak] row, #[strong] tx,
+        move |_| {
+            list.remove(&row);
+            let _ = tx.send(AudioCommand::RemoveEffect(id));
+        }
+    ));
+}
+
+fn move_row(list: &gtk::ListBox, row: &gtk::ListBoxRow, new_index: i32, id: EffectId, tx: &pw::channel::Sender<AudioCommand>) {
+    let max = count_rows(list) - 1;
+    let new_index = new_index.clamp(0, max);
+    if new_index == row.index() { return; }
+    list.remove(row);
+    list.insert(row, new_index);
+    let _ = tx.send(AudioCommand::MoveEffect { id, new_index: new_index as usize });
+}
+
+pub fn effectTemplateGUI(title: String, setting: &gtk::Box) -> (gtk::Box, gtk::CheckButton, gtk::Button, gtk::Button, gtk::Button,){
+    let vbox = gtk::Box::new(Orientation::Vertical, 0);
+
+    let titleCheck = gtk::CheckButton::with_label(&title);
+    titleCheck.set_active(true);
+    vbox.append(&titleCheck);
+
+    let settingsExpander = gtk::Expander::new(Some(&tr("Einstellungen")));
+    settingsExpander.set_child(Some(setting));
+    vbox.append(&settingsExpander);
+
+
+    let hbox = gtk::Box::new(Orientation::Horizontal, 0);
+    vbox.append(&hbox);
+
+    let up = gtk::Button::with_label("▲");
+    hbox.append(&up);
+
+    let down = gtk::Button::with_label("▼");
+    hbox.append(&down);
+
+    let remove = gtk::Button::with_label(&tr("Löschen"));
+    remove.set_hexpand(true);
+    hbox.append(&remove);
+
+
+    (vbox, titleCheck , up, down, remove)
 }
